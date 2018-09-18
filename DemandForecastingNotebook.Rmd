@@ -1,0 +1,244 @@
+---
+title: "GAMs 101"
+output: 
+  html_notebook:
+    toc: true 
+    fig_height: 3
+    fig_width: 4
+---
+******************************
+##### Dataset
+
+This notebook aims at presenting basics of Generalized Additive Models (Hastie & Tibsharani, 1996). We are agoing to focus on fictitious (though probable) data of a subscription business where people sign up for receiving meal boxes. 
+
+```{r, results='hide'}
+library.list <- c('mgcv', 'forecast', 'openxlsx', 'ggplot2', 'e1071', 'dplyr', 'tidyr')
+lapply(library.list, require, character.only=T)
+```
+
+```{r, results='markup'}
+set.seed = 2018
+setwd('~/Documents/MyHF/GAM_tutorial/')
+df <- read.xlsx('subscription_demand.xlsx')
+df$year.num <- c(rep(1, 52), rep(2, nrow(df)-52))
+df$year <- as.factor(paste0('Year', df$year.num))
+head(df)
+summary(df)
+```
+
+************************
+
+Our dataset consists of **5 predictors** and a target ('sales') in form of number of boxes to be shipped each week. Our 'planned' predictors are measured 4 weeks in advance, simply as number of people who plan to churn, pause their subscription or receive a box as usual. Additionally, we will be looking at:
+- **holiday effect**: note this is a continuous and normalized variable, aggregting effects of seasonality and one-time events
+- **trend**: a variable denoting 'baseline' trend of sales, computed on all data available until t-1 for moment t0; also normalized
+
+Interestingly, **no clear time-related effects** can easily be spotted within our target which suggests that forecasting based on traditional time-series methods (like ARIMAx) might not prove to be the best option.
+
+```{r}
+acf(diff(df$sales))
+pacf(diff(df$sales))
+```
+
+```{r, results='hide'}
+df$sales_lag3 <- c(rep(df$sales[1],3), df$sales[1:(nrow(df)-3)])
+plot(df$sales, type='l')
+lines(df$sales_lag3, col='blue')
+```
+
+##### Basic GAM
+
+Let's start with a simple split into train & test. On train set we'll build a basic GAM, letting the package choose number of knots and going with default smooth settings ('tp' - thin plate splines).
+
+```{r, results='markup'}
+df.train <- df[1:87,]
+demand.gam.model <- gam(sales ~ s(holiday.effect) + s(planned_sales) + 
+                s(planned_pauses) + s(planned_churn) +
+                + s(trend), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+```
+
+
+```{r}
+plot(demand.gam.model, pages = 1, shade=T, residuals = T)
+```
+
+##### Smooths & regularization
+
+A large set of smooth options is available. Most common include:
+  - thin plate splines ('tp')
+  - B-splines ('bs')
+  - a subset of B-splines: cubic regression splines ('cr' or shrunk version, 'cs')
+
+See what happens if we switch to cubic splines:
+
+```{r}
+demand.gam.model <- gam(sales ~ s(holiday.effect, bs='cr') + s(planned_sales, bs='cr') + 
+                s(planned_pauses, bs='cr') + s(planned_churn, bs='cr') +
+                + s(trend, bs='cr'), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+
+```
+
+```{r}
+plot(demand.gam.model, pages = 1, shade=T, residuals = T)
+```
+
+We can use regularization, either via a penalty applied to all terms with select=T or using a shrinkage version of smooths.
+
+```{r}
+demand.gam.model <- gam(sales ~ s(holiday.effect, bs='cr') + s(planned_sales, bs='cr') + 
+                s(planned_pauses, bs='cr') + s(planned_churn, bs='cr') +
+                + s(trend, bs='cr'), data = df.train, control=gam.control(mgcv.tol=1e-4), select=T)
+summary(demand.gam.model)
+```
+
+```{r}
+plot(demand.gam.model, pages = 1, shade=T, residuals = T)
+```
+
+```{r}
+spline.type <- 'cs'
+demand.gam.model <- gam(sales ~ s(holiday.effect, bs=spline.type) + s(planned_sales, bs=spline.type) + 
+                s(planned_pauses, bs=spline.type) + s(planned_churn, bs=spline.type) +
+                + s(trend, bs=spline.type), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+```
+
+If nature of our relation between predictors and target changes over time, we can introduce a 'by' variable.
+
+```{r}
+spline.type <- 'cs'
+
+demand.gam.model <- gam(sales ~ year + s(holiday.effect, bs=spline.type, by=year) + s(planned_sales, bs=spline.type) + s(planned_pauses, bs=spline.type) + s(planned_churn, bs=spline.type) +
+                + s(trend, bs=spline.type, by=year), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+```
+
+We can also restrict number of knots used by the algorithm for specific predictors.
+
+```{r}
+spline.type <- 'cs'
+demand.gam.model <- gam(sales ~ year + s(holiday.effect, bs=spline.type, by=year) + s(planned_sales, bs=spline.type) + s(planned_pauses, bs=spline.type) + s(planned_churn, bs=spline.type, k = 3) +
+                + s(trend, bs=spline.type), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+```
+```{r}
+plot(demand.gam.model, pages = 1, shade=T, residuals = T)
+```
+
+Let's see if lagged sales could help or not...
+
+```{r}
+spline.type <- 'cs'
+demand.gam.model <- gam(sales ~ year + s(holiday.effect, bs=spline.type, by=year) + s(planned_sales, bs=spline.type) + s(planned_pauses, bs=spline.type) + s(planned_churn, bs=spline.type) +
+                + s(trend, bs=spline.type) +s(sales_lag3, bs=spline.type), data = df.train, control=gam.control(mgcv.tol=1e-4))
+summary(demand.gam.model)
+```
+
+```{r}
+plot(demand.gam.model, select=7, shade=T, residuals = T)
+```
+
+```{r, results='hide'}
+param.grid <- expand.grid(cost = c(0.001, 0.01, 0.1, 1, 2, 3, 5, 10, 20, 50), gamma = c(0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1))
+
+all.errors <- data.frame()
+for (mm in (83:87)) {
+  errors <- data.frame()
+  for (p in 1:nrow(param.grid)) {
+    svr.model <- svm(sales ~ ., data = df[1:mm,2:8], kernel = 'radial', cost = param.grid$cost[p],
+                   gamma = param.grid$gamma[p])
+    errors <- rbind(errors, c(param.grid$cost[p], param.grid$gamma[p], mean(abs(df[(mm+1):(mm+8),2] - predict(svr.model, newdata = df[(mm+1):(mm+8),2:8])))))
+  }
+  names(errors) <- c('cost','gamma',paste0('error', mm))
+  if (mm==83) {
+    all.errors <- errors
+  } else {
+    all.errors <- inner_join(all.errors, errors, by=c('cost','gamma'))
+  }
+}
+all.errors$avg.error <- apply(all.errors[,3:7], 1, mean)
+all.errors <- all.errors[order(all.errors$avg.error),]
+all.errors[1:10,]
+```
+
+```{r, results='markup'}
+
+all.errors <- data.frame()
+max.obs <- 78:87
+max.cv <- 8
+
+for (m in max.obs) {
+  final.gam <- gam(sales ~ s(holiday.effect, bs=spline.type) + s(planned_sales, bs=spline.type) + s(planned_pauses, bs=spline.type) + s(planned_churn, bs=spline.type) +
+                + s(trend, bs=spline.type), data = df[1:m,], control=gam.control(mgcv.tol=1e-5))
+ svr.model <- svm(sales ~ ., data = df[1:m,2:8], kernel = 'radial', cost = 5,
+                   gamma = 0.02)
+ arima.model <- auto.arima(df$sales[1:m], xreg=df[1:m,c('holiday.effect','year.num')])
+ 
+ gam.preds <- predict(final.gam, newdata = df[(m+1):(m+max.cv),])
+ svr.preds <- predict(svr.model, newdata = df[(m+1):(m+max.cv),])
+ arima.preds <- as.numeric(forecast(arima.model, xreg=df[(m+1):(m+max.cv),c('holiday.effect','year.num')])$mean)
+ gam.svr.preds <- .5 * (gam.preds + svr.preds)
+ svr.arima.preds <- .5 * (svr.preds + arima.preds)
+ gam.arima.preds <- .5 * (gam.preds + arima.preds)
+ combined3preds <- (gam.preds + svr.preds + arima.preds) / 3
+ 
+ actual.sales <- df$sales[(m+1):(m+max.cv)]
+ pred.list <- list(gam.preds, svr.preds, arima.preds, gam.svr.preds, svr.arima.preds, gam.arima.preds,
+                   combined3preds)
+ errors <- sapply(pred.list, function(x) mean(abs(x - actual.sales)/actual.sales)) 
+ all.errors <- rbind(all.errors, errors)
+}
+names(all.errors) <- c('gam','svr','arima','gam.svr','svr.arima','gam.arima','combined3preds')
+all.errors$last.training.week <- paste0('W', max.obs) 
+plot.df <- as.data.frame(all.errors %>% gather('method', 'MAPE', 1:7))
+
+ggplot(aes(x=last.training.week, y = MAPE, group = method), data = plot.df) + 
+  geom_line(aes(color=method)) + geom_point((aes(color=method))) + ylab(paste0('MAPE on next ',max.cv, ' weeks'))
+
+```
+
+```{r}
+library(scam)
+marketing.data <- read.csv('marketing_dummy_data.csv')
+head(marketing.data)
+```
+
+##### Marketing attribution
+
+The key question is how to obtain contributions to target (eg conversions) from each channel where we spent money.
+
+```{r}
+mrktg.gam <- gam(Conversions ~ s(TVSpend, bs = spline.type) + s(Facebook, bs = spline.type) + 
+            s(Affiliate, bs = spline.type) +
+            s(SEM.nonbrand, bs = spline.type) + s(SEM.brand, bs = spline.type) + 
+            Xmas.flag + s(Weekday, k = 7), data = marketing.data)
+summary(mrktg.gam)
+```
+
+```{r}
+df.terms <- predict(mrktg.gam, type='terms')
+head(df.terms, 20)
+plot(mrktg.gam, pages = 2, shade=T, residuals = T)
+```
+
+Some models require applying shape constraints so that we get non-negative impact of channels. Then new splines can be used, e.g:
+- mpi - monotonic increasing penalized B-splines
+- micv - monotonic convex increasing B-splines
+etc.
+Typically shape constraints result in underfitting .
+
+```{r}
+scam.spline.type = 'mpi'
+#marketing.data$Weekday.factor <- as.factor(marketing.data$Weekday)
+mrktg.scam <- scam(Conversions ~ s(TVSpend, bs = scam.spline.type) + s(Facebook, bs = scam.spline.type) + 
+            s(Affiliate, bs = scam.spline.type) +
+            s(SEM.nonbrand, bs = scam.spline.type) + s(SEM.brand, bs = scam.spline.type) + 
+            Xmas.flag + s(Weekday, k=7), data = marketing.data)
+summary(mrktg.scam)
+```
+```{r}
+plot(mrktg.scam, pages=2, shade=T, residuals = T)
+```
+
+
