@@ -18,7 +18,7 @@ lapply(library.list, require, character.only=T)
 
 ```{r, results='markup'}
 set.seed = 2018
-setwd('~/Documents/MyHF/GAM_tutorial/')
+setwd('./data/')
 df <- read.xlsx('subscription_demand.xlsx')
 df$year.num <- c(rep(1, 52), rep(2, nrow(df)-52))
 df$year <- as.factor(paste0('Year', df$year.num))
@@ -200,6 +200,7 @@ ggplot(aes(x=last.training.week, y = MAPE, group = method), data = plot.df) +
 
 ```{r}
 library(scam)
+setwd('./data/')
 marketing.data <- read.csv('marketing_dummy_data.csv')
 head(marketing.data)
 ```
